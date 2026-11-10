@@ -1,0 +1,65 @@
+name: Scheduled Heartbeat Acceptance
+
+on:
+  schedule:
+    - cron: '7,17,27,37,47,57 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scheduled-heartbeat-acceptance
+  cancel-in-progress: false
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    env:
+      HEARTBEAT_BRANCH: ${{ github.event.repository.default_branch }}
+      HEARTBEAT_SCHEDULE: ${{ github.event.schedule }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+      - name: Record actual trigger
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          import json
+          import os
+          from pathlib import Path
+
+          status = {
+              'schema': 'scheduled-heartbeat-acceptance-v1',
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'event': os.environ['GITHUB_EVENT_NAME'],
+              'schedule': os.environ.get('HEARTBEAT_SCHEDULE') or None,
+              'created_at_utc': datetime.now(timezone.utc).isoformat(),
+              'source_commit': os.environ['GITHUB_SHA'],
+              'run_url': (
+                  os.environ['GITHUB_SERVER_URL'] + '/' + os.environ['GITHUB_REPOSITORY']
+                  + '/actions/runs/' + os.environ['GITHUB_RUN_ID']
+              ),
+          }
+          destination = Path('data/status.json')
+          destination.parent.mkdir(parents=True, exist_ok=True)
+          destination.write_text(json.dumps(status, indent=2) + '\n', encoding='utf-8')
+          PY
+      - name: Save heartbeat
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- data/status.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'chore: record scheduler acceptance heartbeat'
+          git pull --rebase origin "$HEARTBEAT_BRANCH"
+          git push origin "HEAD:refs/heads/$HEARTBEAT_BRANCH"
